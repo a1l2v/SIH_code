@@ -10,11 +10,11 @@ import os
 import tempfile
 import base64
 
-app = Flask(_name_)
+app = Flask(__name__)
 CORS(app)  # Allow React frontend to call this API
 
 # Configure Gemini API
-genai.configure(api_key="")  # Replace with your API key
+genai.configure(api_key="AIzaSyChVzmf5YmhlEo8Z8ru4y4Dv7d40n7KCVE")  # Replace with your API key
 model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Conversation history (simulates Redis storage)
@@ -264,7 +264,7 @@ def chat_with_audio():
 
         # Generate audio for the response
         audio_path = speak_malayalam(result['response'])
-
+        print(audio_path)
         if audio_path:
             # Extract only the file name (not the full path)
             audio_filename = os.path.basename(audio_path)
@@ -328,7 +328,7 @@ def speech_to_text():
         audio_file = request.files['audio']
         
         # Save temporarily
-        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
         audio_file.save(temp_audio.name)
         
         # Recognize speech
@@ -523,7 +523,7 @@ def health_check():
 
 # ============== MAIN ==============
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     print("=" * 80)
     print("🌾 FARMER ADVISORY API SERVER WITH SPEECH SUPPORT")
     print("=" * 80)
