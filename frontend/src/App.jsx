@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Cloud, Bug, TrendingUp, Building2, Mic, ChevronRight, CloudRain, User, Square, Upload } from 'lucide-react';
+import { Cloud, Bug, TrendingUp, Building2, Mic, ChevronRight, CloudRain, User, Square, Upload, Play, Pause } from 'lucide-react';
 
 const FarmAssistantInterface = () => {
   const [activeTab, setActiveTab] = useState('Home');
@@ -7,10 +7,14 @@ const FarmAssistantInterface = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [error, setError] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [responseAudio, setResponseAudio] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const audioPlayerRef = useRef(null);
 
   const startRecording = async () => {
     try {
@@ -19,7 +23,7 @@ const FarmAssistantInterface = () => {
       streamRef.current = stream;
       
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm' // Will be converted to MP3-like format
+        mimeType: 'audio/webm'
       });
       
       mediaRecorderRef.current = mediaRecorder;
@@ -87,12 +91,50 @@ const FarmAssistantInterface = () => {
         url: data.url,
         message: data.message
       });
+
+      // Now call url_to_response with the uploaded file URL
+      await processAudioResponse(data.url);
       
     } catch (err) {
       setError(err.message || 'Failed to upload recording');
       setUploadStatus({ success: false });
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const processAudioResponse = async (audioUrl) => {
+    setIsProcessing(true);
+    
+    try {
+      const response = await fetch('http://localhost:5000/api/url_to_response', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: audioUrl }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Processing failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.audio_url) {
+        setResponseAudio(data.audio_url);
+        // Auto-play the response
+        setTimeout(() => {
+          if (audioPlayerRef.current) {
+            audioPlayerRef.current.play();
+          }
+        }, 100);
+      }
+
+    } catch (err) {
+      setError(err.message || 'Failed to process audio response');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -104,9 +146,35 @@ const FarmAssistantInterface = () => {
     }
   };
 
+  const handleAudioPlay = () => {
+    setIsPlaying(true);
+  };
+
+  const handleAudioPause = () => {
+    setIsPlaying(false);
+  };
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setResponseAudio(null);
+    setUploadStatus(null);
+  };
+
+  const togglePlayPause = () => {
+    if (audioPlayerRef.current) {
+      if (isPlaying) {
+        audioPlayerRef.current.pause();
+      } else {
+        audioPlayerRef.current.play();
+      }
+    }
+  };
+
   const resetStatus = () => {
     setUploadStatus(null);
     setError(null);
+    setResponseAudio(null);
+    setIsPlaying(false);
   };
 
   const tabs = [
@@ -153,37 +221,80 @@ const FarmAssistantInterface = () => {
           <div className="px-6 mb-6">
             <h3 className="text-white font-semibold mb-4">Quick Access</h3>
             
-            {/* Recording Button */}
-            <button
-              onClick={handleRecordingClick}
-              disabled={isUploading}
-              className={`w-full rounded-2xl p-4 mb-4 transition-all duration-200 ${
-                isRecording 
-                  ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
-                  : isUploading
-                  ? 'bg-gray-500 cursor-not-allowed'
-                  : 'bg-green-500 hover:bg-green-600'
-              }`}
-            >
-              <div className="flex items-center gap-3 justify-center">
-                {isUploading ? (
-                  <>
-                    <Upload className="w-8 h-8 text-white animate-spin" />
-                    <span className="text-white text-lg font-medium">Uploading...</span>
-                  </>
-                ) : isRecording ? (
-                  <>
-                    <Square className="w-8 h-8 text-white" />
-                    <span className="text-white text-lg font-medium">Stop Recording</span>
-                  </>
-                ) : (
-                  <>
-                    <Mic className="w-8 h-8 text-white" />
-                    <span className="text-white text-lg font-medium">Ask a Question</span>
-                  </>
-                )}
+            {/* Recording/Audio Player Button */}
+            {responseAudio ? (
+              // Audio Player Mode
+              <div className="w-full bg-blue-600 rounded-2xl p-4 mb-4">
+                <div className="flex items-center gap-3 justify-center mb-3">
+                  <button
+                    onClick={togglePlayPause}
+                    className="bg-white/20 hover:bg-white/30 rounded-full p-3 transition-colors"
+                  >
+                    {isPlaying ? (
+                      <Pause className="w-6 h-6 text-white" />
+                    ) : (
+                      <Play className="w-6 h-6 text-white" />
+                    )}
+                  </button>
+                  <span className="text-white text-lg font-medium">
+                    {isPlaying ? 'Playing Response' : 'Response Ready'}
+                  </span>
+                </div>
+                
+                <audio
+                  ref={audioPlayerRef}
+                  src={responseAudio}
+                  onPlay={handleAudioPlay}
+                  onPause={handleAudioPause}
+                  onEnded={handleAudioEnded}
+                  className="hidden"
+                />
+                
+                <button
+                  onClick={resetStatus}
+                  className="w-full bg-white/20 hover:bg-white/30 text-white rounded-lg py-2 px-4 text-sm transition-colors"
+                >
+                  Ask Another Question
+                </button>
               </div>
-            </button>
+            ) : (
+              // Recording Button Mode
+              <button
+                onClick={handleRecordingClick}
+                disabled={isUploading || isProcessing}
+                className={`w-full rounded-2xl p-4 mb-4 transition-all duration-200 ${
+                  isRecording 
+                    ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
+                    : (isUploading || isProcessing)
+                    ? 'bg-gray-500 cursor-not-allowed'
+                    : 'bg-green-500 hover:bg-green-600'
+                }`}
+              >
+                <div className="flex items-center gap-3 justify-center">
+                  {isProcessing ? (
+                    <>
+                      <Upload className="w-8 h-8 text-white animate-spin" />
+                      <span className="text-white text-lg font-medium">Processing...</span>
+                    </>
+                  ) : isUploading ? (
+                    <>
+                      <Upload className="w-8 h-8 text-white animate-spin" />
+                      <span className="text-white text-lg font-medium">Uploading...</span>
+                    </>
+                  ) : isRecording ? (
+                    <>
+                      <Square className="w-8 h-8 text-white" />
+                      <span className="text-white text-lg font-medium">Stop Recording</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-8 h-8 text-white" />
+                      <span className="text-white text-lg font-medium">Ask a Question</span>
+                    </>
+                  )}
+                </div>
+              </button>
+            )}
 
             {/* Status Messages */}
             {error && (
@@ -198,20 +309,16 @@ const FarmAssistantInterface = () => {
               </div>
             )}
 
-            {uploadStatus && uploadStatus.success && (
+            {uploadStatus && uploadStatus.success && !responseAudio && (
               <div className="mb-4 bg-green-500/20 border border-green-500/50 rounded-xl p-3">
                 <p className="text-green-200 text-sm text-center font-medium">
-                  {uploadStatus.message}
+                  {isProcessing ? 'Getting response...' : uploadStatus.message}
                 </p>
-                <p className="text-green-300 text-xs text-center mt-1">
-                  File: {uploadStatus.filename}
-                </p>
-                <button 
-                  onClick={resetStatus}
-                  className="mt-2 text-green-300 text-xs underline block mx-auto"
-                >
-                  Dismiss
-                </button>
+                {!isProcessing && (
+                  <p className="text-green-300 text-xs text-center mt-1">
+                    File: {uploadStatus.filename}
+                  </p>
+                )}
               </div>
             )}
             
