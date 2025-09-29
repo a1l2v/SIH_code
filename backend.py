@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 import google.generativeai as genai
 import speech_recognition as sr
 from gtts import gTTS
@@ -9,9 +10,14 @@ import os
 import json
 import requests
 from bs4 import BeautifulSoup
+from pydub import AudioSegment
 from urllib.parse import urlparse
+import io
+import traceback
 
 app = Flask(__name__)
+
+CORS(app)
 
 # -------------------------
 # Configure Gemini API
@@ -72,84 +78,30 @@ SAMPLE_SCHEMES = [
 # Helper Functions
 # -------------------------
 def get_system_prompt():
-    return f"""You are an expert farmer advisory AI assistant specializing in Indian agriculture. You MUST respond in Malayalam script only.
+    return f"""You are a farmer advisory AI. Always respond in Malayalam script only.
 
-FARMER PROFILE:
-- Name: {SAMPLE_FARMER_PROFILE['name']}
-- Location: {SAMPLE_FARMER_PROFILE['location']}
-- Farm Size: {SAMPLE_FARMER_PROFILE['farm_size']}
-- Crops: {', '.join(SAMPLE_FARMER_PROFILE['crops'])}
-- Soil Type: {SAMPLE_FARMER_PROFILE['soil_type']}
-- Irrigation: {SAMPLE_FARMER_PROFILE['irrigation']}
+Farmer: {SAMPLE_FARMER_PROFILE['name']}, {SAMPLE_FARMER_PROFILE['location']}
+Crops: {', '.join(SAMPLE_FARMER_PROFILE['crops'])}
 
-CURRENT CONDITIONS:
-- Weather: {SAMPLE_WEATHER['current']}
-- Forecast: {SAMPLE_WEATHER['forecast']}
-- Advisory: {SAMPLE_WEATHER['advisory']}
+Rules:
+1. ALWAYS respond in Malayalam script (മലയാളം)
+2. Keep responses SHORT - 2-3 sentences maximum
+3. Give ACTIONABLE advice
+4. Use simple Malayalam words
+5. Include numbers/prices when relevant
+6. Never discourage farmers - always give solutions
+7. If data unavailable, feel free to use common farming knowledge
 
-MARKET PRICES:
-{json.dumps(SAMPLE_MARKET_DATA, indent=2)}
+Current Market Prices:
+- Rice: ₹2,100/quintal
+- Cotton: ₹5,800/quintal  
+- Groundnut: ₹5,200/quintal
 
-PEST ALERTS:
-{json.dumps(SAMPLE_PEST_ALERTS, indent=2)}
+Pest Alerts:
+- Rice: Brown Plant Hopper outbreak nearby
+- Cotton: Bollworm moderate activity
 
-SCHEMES:
-{json.dumps(SAMPLE_SCHEMES, indent=2)}
-
-CRITICAL INSTRUCTIONS - READ CAREFULLY:
-1. ALWAYS respond in Malayalam script (മലയാളം) - NEVER in English or Manglish
-2. Keep responses SHORT - exactly 2-3 sentences maximum
-3. Be DIRECT and give ACTIONABLE advice
-4. Use simple Malayalam words that farmers understand
-5. Include specific numbers, prices, or timings when relevant
-
-EXAMPLE RESPONSES FOR DIFFERENT INTENTS:
-
-MARKET/PRICE QUERIES:
-Query: "അരിയുടെ വില എത്രയാണ്?"
-Response: "ഇപ്പോൾ അരിയുടെ വില ക്വിന്റലിന് ₹2,100 ആണ്. ആവശ്യം കൂടുതലാണ്, വില കൂടാൻ സാധ്യതയുണ്ട്."
-
-Query: "പരുത്തി എപ്പോൾ വിൽക്കണം?"
-Response: "പരുത്തിയുടെ വില ക്വിന്റലിന് ₹5,800 ആണ്. വില സ്ഥിരതയുള്ളതിനാൽ ഇപ്പോൾ വിൽക്കാം."
-
-PEST/DISEASE QUERIES:
-Query: "നെല്ലിൽ കീടം വന്നിട്ടുണ്ട്"
-Response: "ബ്രൗൺ പ്ലാന്റ് ഹോപ്പർ ആണോ? അടുത്ത ജില്ലകളിൽ പടരുന്നുണ്ട്. ഉടൻ കീടനാശിനി തളിക്കുക, കൃഷി ഓഫീസിൽ നിന്ന് മരുന്ന് വാങ്ങൂ."
-
-Query: "പരുത്തിയിൽ പുഴു ഉണ്ട്"
-Response: "ബോൾവേം ആണോ? ഇപ്പോൾ മിതമായ തോതിൽ ഉണ്ട്. ദിവസവും പരിശോധിക്കുക, ആവശ്യമെങ്കിൽ സ്പ്രേ ചെയ്യുക."
-
-IRRIGATION/WATER QUERIES:
-Query: "എപ്പോൾ വെള്ളം കൊടുക്കണം?"
-Response: "3-4 ദിവസത്തിനകം മഴ പ്രതീക്ഷിക്കുന്നു, 15mm. ഇപ്പോൾ ഭൂമി ഒരുക്കാൻ നല്ല സമയമാണ്, മഴയ്ക്ക് ശേഷം നടീൽ നടത്താം."
-
-Query: "ബോർവെൽ വെള്ളം കുറവാണ്"
-Response: "കനാൽ വെള്ളവും ഉപയോഗിക്കുക. ഡ്രിപ്പ് ഇറിഗേഷൻ സംവിധാനം സ്ഥാപിച്ചാൽ വെള്ളം 40% ലാഭിക്കാം."
-
-GOVERNMENT SCHEME QUERIES:
-Query: "സർക്കാർ പദ്ധതികൾ എന്തൊക്കെയാണ്?"
-Response: "PM-KISAN പദ്ധതിയിൽ വർഷം ₹6,000 കിട്ടും. വിള ഇൻഷുറൻസിൽ 50% സബ്‌സിഡി ഉണ്ട്, ഭൂരേഖയുള്ളവർക്ക് അപേക്ഷിക്കാം."
-
-WEATHER QUERIES:
-Query: "കാലാവസ്ഥ എങ്ങനെയാണ്?"
-Response: "ഇന്ന് ഭാഗികമായി മേഘാവൃതം, 28°C. 3-4 ദിവസത്തിനകം മഴ പ്രതീക്ഷിക്കുന്നു, നിലമൊരുക്കാൻ നല്ല സമയം."
-
-GENERAL FARMING QUERIES:
-Query: "നെല്ല് കൃഷി എങ്ങനെ തുടങ്ങണം?"
-Response: "ആദ്യം നിലം ഉഴുതുനിരത്തുക. മഴ വന്നതിനുശേഷം നടീൽ ചെയ്യുക, നിങ്ങളുടെ ചുവന്ന മണ്ണിന് നെല്ല് നല്ലതാണ്."
-
-Query: "എന്റെ വിള എങ്ങനെ ഉപേക്ഷിക്കണം?" or "വിള നശിപ്പിക്കണോ?"
-Response: "വിള ഉപേക്ഷിക്കരുത്! പ്രശ്നം എന്താണെന്ന് പറയൂ - കീടം, വെള്ളക്കുറവ്, അല്ലെങ്കിൽ വിള നഷ്ടം? ഞങ്ങൾ പരിഹാരം കണ്ടെത്താം."
-
-Query: "കൃഷി നഷ്ടമായി എന്ത് ചെയ്യും?"
-Response: "വിള ഇൻഷുറൻസ് എടുത്തിട്ടുണ്ടോ? ഉണ്ടെങ്കിൽ നഷ്ടപരിഹാരം കിട്ടും. അടുത്ത സീസണിൽ മറ്റൊരു വിള പരീക്ഷിക്കാം."
-
-REMEMBER:
-- SHORT answers (2-3 sentences)
-- Malayalam script ONLY
-- Practical, actionable advice
-- Include numbers/prices when relevant
-- Never discourage farmers - always give solutions!
+Weather: {SAMPLE_WEATHER['forecast']}
 """
 
 def classify_intent(query):
@@ -205,43 +157,57 @@ def text_to_malayalam_audio(text):
         return filename
     except Exception as e:
         print("TTS Error:", e)
+        traceback.print_exc()
         return None
 
 def extract_text_from_url(url):
-    """Extracts text content from a given URL"""
+    """
+    Downloads MP3 from URL and converts it to text.
+    Works entirely with MP3 - no WAV files created on disk.
+    """
     try:
-        parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            raise ValueError("Invalid URL format")
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
+        # 1. Download MP3 file
+        response = requests.get(url, stream=True, timeout=20)
         response.raise_for_status()
+
+        # Save to temporary MP3 file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_mp3:
+            for chunk in response.iter_content(chunk_size=1024):
+                tmp_mp3.write(chunk)
+            tmp_mp3_path = tmp_mp3.name
+
+        # 2. Load MP3 and convert to audio data for speech recognition
+        audio = AudioSegment.from_mp3(tmp_mp3_path)
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Export to a BytesIO buffer as WAV data (in-memory only)
+        buffer = io.BytesIO()
+        audio.export(buffer, format="wav")
+        buffer.seek(0)
+
+        # 3. Recognize speech directly from buffer
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(buffer) as source:
+            audio_data = recognizer.record(source)
+            try:
+                text = recognizer.recognize_google(audio_data, language='ml-IN')
+            except:
+                text = recognizer.recognize_google(audio_data, language='en-IN')
+
+        # Clean up temporary MP3 file
+        os.remove(tmp_mp3_path)
         
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
-        
-        text = soup.get_text(separator=' ', strip=True)
-        
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        text = ' '.join(chunk for chunk in chunks if chunk)
-        
-        max_length = 5000
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-        
+        print(f"Transcribed text: {text}")
         return text
-    
-    except requests.RequestException as e:
-        raise Exception(f"Failed to fetch URL: {str(e)}")
+
+    except sr.UnknownValueError:
+        traceback.print_exc()
+        return "Error: Could not understand audio"
+    except sr.RequestError as e:
+        traceback.print_exc()
+        return f"Error: Speech recognition service error - {e}"
     except Exception as e:
-        raise Exception(f"Error extracting text: {str(e)}")
+        traceback.print_exc()
+        return f"Error: {e}"
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -253,10 +219,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @app.route("/api/farmer_to_response", methods=["POST"])
 def farmer_to_response():
     """
-    Handles audio input OR text query
-    - converts audio to text
-    - gets Gemini response
-    - returns response + audio file URL
+    Handles audio input OR text query - MP3 only version
     """
     try:
         query_text = None
@@ -264,13 +227,22 @@ def farmer_to_response():
         # If audio provided
         if 'audio' in request.files:
             audio_file = request.files['audio']
-            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
             audio_file.save(temp_audio.name)
 
+            # Load MP3 and convert to buffer (in-memory)
+            audio = AudioSegment.from_mp3(temp_audio.name)
+            buffer = io.BytesIO()
+            audio.export(buffer, format="wav")
+            buffer.seek(0)
+
             recognizer = sr.Recognizer()
-            with sr.AudioFile(temp_audio.name) as source:
+            with sr.AudioFile(buffer) as source:
                 audio_data = recognizer.record(source)
-                query_text = recognizer.recognize_google(audio_data, language="ml-IN")
+                try:
+                    query_text = recognizer.recognize_google(audio_data, language="ml-IN")
+                except:
+                    query_text = recognizer.recognize_google(audio_data, language="en-IN")
 
             os.remove(temp_audio.name)
 
@@ -294,19 +266,21 @@ def farmer_to_response():
         return jsonify(result)
 
     except sr.UnknownValueError:
+        traceback.print_exc()
         return jsonify({"error": "Could not understand the audio"}), 400
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/url_to_response", methods=["POST"])
 def url_to_response():
     """
-    Accepts a URL, extracts text, sends to LLM with context,
+    Accepts a URL, extracts audio/text, sends to LLM with context,
     generates response and audio file
     
     Request body (JSON):
     {
-        "url": "https://example.com/article"
+        "url": "https://example.com/audio.mp3"
     }
     """
     try:
@@ -316,19 +290,19 @@ def url_to_response():
         if not url:
             return jsonify({"error": "No URL provided"}), 400
         
-        # Extract text from URL
+        # Extract text from URL (audio transcription)
         extracted_text = extract_text_from_url(url)
         
-        if not extracted_text or len(extracted_text.strip()) < 10:
-            return jsonify({"error": "Could not extract meaningful text from URL"}), 400
+        if not extracted_text or extracted_text.startswith("Error:"):
+            return jsonify({"error": extracted_text or "Could not extract audio"}), 400
         
-        # Create query context
-        query_context = f"ഈ ഉള്ളടക്കം അടിസ്ഥാനമാക്കി കൃഷി ഉപദേശം നൽകുക: {extracted_text[:2000]}"
+        if len(extracted_text.strip()) < 3:
+            return jsonify({"error": "Could not extract meaningful text from audio"}), 400
         
-        # Get Gemini advice
-        result = get_farmer_advice(query_context)
+        # Get Gemini advice based on transcribed query
+        result = get_farmer_advice(extracted_text)
         
-        result['extracted_text'] = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
+        result['transcribed_query'] = extracted_text
         result['source_url'] = url
         
         # Generate Malayalam audio
@@ -341,6 +315,60 @@ def url_to_response():
         return jsonify(result)
     
     except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/process_local_audio", methods=["POST"])
+def process_local_audio():
+    """
+    Process an already uploaded MP3 file
+    Request body: {"filename": "crop_what_time_growth.mp3"}
+    """
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        
+        if not filename:
+            return jsonify({"error": "No filename provided"}), 400
+        
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({"error": "File not found"}), 404
+        
+        # Load MP3 directly
+        audio = AudioSegment.from_mp3(file_path)
+        
+        # Convert to buffer for speech recognition (in-memory)
+        buffer = io.BytesIO()
+        audio.export(buffer, format="wav")
+        buffer.seek(0)
+        
+        # Speech recognition
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(buffer) as source:
+            audio_data = recognizer.record(source)
+            try:
+                query_text = recognizer.recognize_google(audio_data, language='ml-IN')
+            except:
+                query_text = recognizer.recognize_google(audio_data, language='en-IN')
+        
+        # Get Gemini advice
+        result = get_farmer_advice(query_text)
+        result['transcribed_query'] = query_text
+        result['source_file'] = filename
+        
+        # Generate Malayalam audio
+        audio_filename = text_to_malayalam_audio(result['response'])
+        result['audio_file'] = audio_filename
+        
+        if audio_filename:
+            result['audio_url'] = f"http://localhost:5000/audio/{audio_filename}"
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/audio/<filename>")
