@@ -1,8 +1,113 @@
-import React, { useState } from 'react';
-import { Cloud, Bug, TrendingUp, Building2, Mic, ChevronRight, CloudRain, User } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Cloud, Bug, TrendingUp, Building2, Mic, ChevronRight, CloudRain, User, Square, Upload } from 'lucide-react';
 
 const FarmAssistantInterface = () => {
   const [activeTab, setActiveTab] = useState('Home');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const [error, setError] = useState(null);
+  
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const streamRef = useRef(null);
+
+  const startRecording = async () => {
+    try {
+      setError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm' // Will be converted to MP3-like format
+      });
+      
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      
+      mediaRecorder.onstop = () => {
+        uploadRecording();
+      };
+      
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      setError('Failed to access microphone. Please check permissions.');
+      console.error('Error accessing microphone:', err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      
+      // Stop all tracks to release microphone
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    }
+  };
+
+  const uploadRecording = async () => {
+    if (audioChunksRef.current.length === 0) return;
+    
+    setIsUploading(true);
+    setUploadStatus(null);
+    
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const formData = new FormData();
+      
+      // Create a filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `recording-${timestamp}.mp3`;
+      
+      formData.append('file', audioBlob, filename);
+      
+      const response = await fetch('http://localhost:5000/upload-audio', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      setUploadStatus({
+        success: true,
+        filename: data.filename,
+        url: data.url,
+        message: data.message
+      });
+      
+    } catch (err) {
+      setError(err.message || 'Failed to upload recording');
+      setUploadStatus({ success: false });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleRecordingClick = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  const resetStatus = () => {
+    setUploadStatus(null);
+    setError(null);
+  };
 
   const tabs = [
     { name: 'Home', icon: Building2 },
@@ -16,7 +121,7 @@ const FarmAssistantInterface = () => {
       {/* Mobile Interface Container */}
       <div className="w-full max-w-sm mx-auto">
         {/* Search Bar */}
-        <div className="mb-6">
+        {/* <div className="mb-6">
           <div className="bg-white/20 backdrop-blur-sm rounded-2xl px-6 py-3 shadow-lg">
             <input
               type="text"
@@ -24,7 +129,7 @@ const FarmAssistantInterface = () => {
               className="w-full bg-transparent text-white placeholder-white/70 outline-none text-lg"
             />
           </div>
-        </div>
+        </div> */}
 
         {/* Main Interface */}
         <div className="bg-black/90 rounded-3xl overflow-hidden shadow-2xl">
@@ -47,12 +152,68 @@ const FarmAssistantInterface = () => {
           {/* Quick Access */}
           <div className="px-6 mb-6">
             <h3 className="text-white font-semibold mb-4">Quick Access</h3>
-            <div className="bg-green-500 rounded-2xl p-4 mb-4">
-              <div className="flex items-center gap-3">
-                <Mic className="w-8 h-8 text-white" />
-                <span className="text-white text-lg font-medium">Ask a Question</span>
+            
+            {/* Recording Button */}
+            <button
+              onClick={handleRecordingClick}
+              disabled={isUploading}
+              className={`w-full rounded-2xl p-4 mb-4 transition-all duration-200 ${
+                isRecording 
+                  ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
+                  : isUploading
+                  ? 'bg-gray-500 cursor-not-allowed'
+                  : 'bg-green-500 hover:bg-green-600'
+              }`}
+            >
+              <div className="flex items-center gap-3 justify-center">
+                {isUploading ? (
+                  <>
+                    <Upload className="w-8 h-8 text-white animate-spin" />
+                    <span className="text-white text-lg font-medium">Uploading...</span>
+                  </>
+                ) : isRecording ? (
+                  <>
+                    <Square className="w-8 h-8 text-white" />
+                    <span className="text-white text-lg font-medium">Stop Recording</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-8 h-8 text-white" />
+                    <span className="text-white text-lg font-medium">Ask a Question</span>
+                  </>
+                )}
               </div>
-            </div>
+            </button>
+
+            {/* Status Messages */}
+            {error && (
+              <div className="mb-4 bg-red-500/20 border border-red-500/50 rounded-xl p-3">
+                <p className="text-red-200 text-sm text-center">{error}</p>
+                <button 
+                  onClick={resetStatus}
+                  className="mt-2 text-red-300 text-xs underline block mx-auto"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {uploadStatus && uploadStatus.success && (
+              <div className="mb-4 bg-green-500/20 border border-green-500/50 rounded-xl p-3">
+                <p className="text-green-200 text-sm text-center font-medium">
+                  {uploadStatus.message}
+                </p>
+                <p className="text-green-300 text-xs text-center mt-1">
+                  File: {uploadStatus.filename}
+                </p>
+                <button 
+                  onClick={resetStatus}
+                  className="mt-2 text-green-300 text-xs underline block mx-auto"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             
             <div className="grid grid-cols-4 gap-3">
               <div className="bg-white/10 rounded-xl p-3 text-center">
