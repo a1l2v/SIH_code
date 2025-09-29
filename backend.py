@@ -7,6 +7,9 @@ import datetime
 import tempfile
 import os
 import json
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -26,7 +29,7 @@ SAMPLE_FARMER_PROFILE = {
     "crops": ["Rice", "Cotton", "Groundnut"],
     "soil_type": "Red soil",
     "irrigation": "Bore well + Canal",
-    "language": "Telugu",
+    "language": "Malayalam",
     "last_yield": {
         "rice": "4.2 tons/acre",
         "cotton": "12 quintals/acre"
@@ -69,7 +72,7 @@ SAMPLE_SCHEMES = [
 # Helper Functions
 # -------------------------
 def get_system_prompt():
-    return f"""You are an expert farmer advisory AI assistant specializing in Indian agriculture. Respond in Malayalam letters.
+    return f"""You are an expert farmer advisory AI assistant specializing in Indian agriculture. You MUST respond in Malayalam script only.
 
 FARMER PROFILE:
 - Name: {SAMPLE_FARMER_PROFILE['name']}
@@ -93,29 +96,97 @@ PEST ALERTS:
 SCHEMES:
 {json.dumps(SAMPLE_SCHEMES, indent=2)}
 
-CRITICAL RESPONSE INSTRUCTIONS:
-1. Respond in Malayalam letters only
-2. Keep it short (3–4 sentences)
-3. Simple words, practical advice
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
+1. ALWAYS respond in Malayalam script (മലയാളം) - NEVER in English or Manglish
+2. Keep responses SHORT - exactly 2-3 sentences maximum
+3. Be DIRECT and give ACTIONABLE advice
+4. Use simple Malayalam words that farmers understand
+5. Include specific numbers, prices, or timings when relevant
+
+EXAMPLE RESPONSES FOR DIFFERENT INTENTS:
+
+MARKET/PRICE QUERIES:
+Query: "അരിയുടെ വില എത്രയാണ്?"
+Response: "ഇപ്പോൾ അരിയുടെ വില ക്വിന്റലിന് ₹2,100 ആണ്. ആവശ്യം കൂടുതലാണ്, വില കൂടാൻ സാധ്യതയുണ്ട്."
+
+Query: "പരുത്തി എപ്പോൾ വിൽക്കണം?"
+Response: "പരുത്തിയുടെ വില ക്വിന്റലിന് ₹5,800 ആണ്. വില സ്ഥിരതയുള്ളതിനാൽ ഇപ്പോൾ വിൽക്കാം."
+
+PEST/DISEASE QUERIES:
+Query: "നെല്ലിൽ കീടം വന്നിട്ടുണ്ട്"
+Response: "ബ്രൗൺ പ്ലാന്റ് ഹോപ്പർ ആണോ? അടുത്ത ജില്ലകളിൽ പടരുന്നുണ്ട്. ഉടൻ കീടനാശിനി തളിക്കുക, കൃഷി ഓഫീസിൽ നിന്ന് മരുന്ന് വാങ്ങൂ."
+
+Query: "പരുത്തിയിൽ പുഴു ഉണ്ട്"
+Response: "ബോൾവേം ആണോ? ഇപ്പോൾ മിതമായ തോതിൽ ഉണ്ട്. ദിവസവും പരിശോധിക്കുക, ആവശ്യമെങ്കിൽ സ്പ്രേ ചെയ്യുക."
+
+IRRIGATION/WATER QUERIES:
+Query: "എപ്പോൾ വെള്ളം കൊടുക്കണം?"
+Response: "3-4 ദിവസത്തിനകം മഴ പ്രതീക്ഷിക്കുന്നു, 15mm. ഇപ്പോൾ ഭൂമി ഒരുക്കാൻ നല്ല സമയമാണ്, മഴയ്ക്ക് ശേഷം നടീൽ നടത്താം."
+
+Query: "ബോർവെൽ വെള്ളം കുറവാണ്"
+Response: "കനാൽ വെള്ളവും ഉപയോഗിക്കുക. ഡ്രിപ്പ് ഇറിഗേഷൻ സംവിധാനം സ്ഥാപിച്ചാൽ വെള്ളം 40% ലാഭിക്കാം."
+
+GOVERNMENT SCHEME QUERIES:
+Query: "സർക്കാർ പദ്ധതികൾ എന്തൊക്കെയാണ്?"
+Response: "PM-KISAN പദ്ധതിയിൽ വർഷം ₹6,000 കിട്ടും. വിള ഇൻഷുറൻസിൽ 50% സബ്‌സിഡി ഉണ്ട്, ഭൂരേഖയുള്ളവർക്ക് അപേക്ഷിക്കാം."
+
+WEATHER QUERIES:
+Query: "കാലാവസ്ഥ എങ്ങനെയാണ്?"
+Response: "ഇന്ന് ഭാഗികമായി മേഘാവൃതം, 28°C. 3-4 ദിവസത്തിനകം മഴ പ്രതീക്ഷിക്കുന്നു, നിലമൊരുക്കാൻ നല്ല സമയം."
+
+GENERAL FARMING QUERIES:
+Query: "നെല്ല് കൃഷി എങ്ങനെ തുടങ്ങണം?"
+Response: "ആദ്യം നിലം ഉഴുതുനിരത്തുക. മഴ വന്നതിനുശേഷം നടീൽ ചെയ്യുക, നിങ്ങളുടെ ചുവന്ന മണ്ണിന് നെല്ല് നല്ലതാണ്."
+
+Query: "എന്റെ വിള എങ്ങനെ ഉപേക്ഷിക്കണം?" or "വിള നശിപ്പിക്കണോ?"
+Response: "വിള ഉപേക്ഷിക്കരുത്! പ്രശ്നം എന്താണെന്ന് പറയൂ - കീടം, വെള്ളക്കുറവ്, അല്ലെങ്കിൽ വിള നഷ്ടം? ഞങ്ങൾ പരിഹാരം കണ്ടെത്താം."
+
+Query: "കൃഷി നഷ്ടമായി എന്ത് ചെയ്യും?"
+Response: "വിള ഇൻഷുറൻസ് എടുത്തിട്ടുണ്ടോ? ഉണ്ടെങ്കിൽ നഷ്ടപരിഹാരം കിട്ടും. അടുത്ത സീസണിൽ മറ്റൊരു വിള പരീക്ഷിക്കാം."
+
+REMEMBER:
+- SHORT answers (2-3 sentences)
+- Malayalam script ONLY
+- Practical, actionable advice
+- Include numbers/prices when relevant
+- Never discourage farmers - always give solutions!
 """
 
 def classify_intent(query):
+    """Enhanced multilingual intent classification"""
     q = query.lower()
-    if any(k in q for k in ['വില','price','market','വിപണി']):
+    
+    # Market/Price keywords
+    if any(k in q for k in ['വില','price','market','വിപണി','വിൽക്ക','sell','rate','ധര','കിലോ','quintal','ക്വിന്റൽ']):
         return 'market'
-    elif any(k in q for k in ['കീടം','pest','disease','spray']):
+    
+    # Pest/Disease keywords
+    elif any(k in q for k in ['കീടം','കീട','pest','disease','രോഗം','spray','തളിക്ക','പുഴു','insect','bug','fungus']):
         return 'pest_disease'
-    elif any(k in q for k in ['വെള്ളം','irrigation','water']):
+    
+    # Irrigation/Water keywords
+    elif any(k in q for k in ['വെള്ളം','water','irrigation','നീര്','drip','sprinkler','bore','well','canal']):
         return 'irrigation'
-    elif any(k in q for k in ['പദ്ധതി','scheme','subsidy']):
+    
+    # Government Scheme keywords
+    elif any(k in q for k in ['പദ്ധതി','scheme','subsidy','സബ്സിഡി','government','സർക്കാർ','loan','insurance','ഇൻഷുറൻസ്']):
         return 'schemes'
-    elif any(k in q for k in ['മഴ','weather','കാലാവസ്ഥ']):
+    
+    # Weather keywords
+    elif any(k in q for k in ['മഴ','weather','കാലാവസ്ഥ','temperature','rain','forecast','climate']):
         return 'weather'
-    return 'general_agronomy'
+    
+    # Crop failure / giving up keywords
+    elif any(k in q for k in ['ഉപേക്ഷിക്ക','drop','give up','quit','നശിപ്പിക്ക','destroy','നഷ്ടം','loss','failed']):
+        return 'crop_failure_support'
+    
+    # General farming
+    else:
+        return 'general_agronomy'
 
 def get_farmer_advice(query):
     intent = classify_intent(query)
-    prompt = f"{get_system_prompt()}\n\nFarmer Query: {query}\nIntent: {intent}\n\nProvide helpful advice:"
+    prompt = f"{get_system_prompt()}\n\nFarmer Query: {query}\nIntent: {intent}\n\nProvide helpful advice in Malayalam:"
     response = model.generate_content(prompt)
     return {
         "response": response.text,
@@ -131,24 +202,61 @@ def text_to_malayalam_audio(text):
         filepath = os.path.join(audio_dir, filename)
         tts = gTTS(text=text, lang='ml')
         tts.save(filepath)
-        return filename  # return only filename
+        return filename
     except Exception as e:
         print("TTS Error:", e)
         return None
+
+def extract_text_from_url(url):
+    """Extracts text content from a given URL"""
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("Invalid URL format")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        for script in soup(["script", "style", "nav", "footer", "header"]):
+            script.decompose()
+        
+        text = soup.get_text(separator=' ', strip=True)
+        
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+        
+        max_length = 5000
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+        
+        return text
+    
+    except requests.RequestException as e:
+        raise Exception(f"Failed to fetch URL: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Error extracting text: {str(e)}")
+
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 # -------------------------
-# API Endpoint
+# API Endpoints
 # -------------------------
 
 @app.route("/api/farmer_to_response", methods=["POST"])
 def farmer_to_response():
     """
-    Handles:
-    - audio input OR text query
+    Handles audio input OR text query
     - converts audio to text
     - gets Gemini response
-    - returns response + audio file name
+    - returns response + audio file URL
     """
     try:
         query_text = None
@@ -179,6 +287,9 @@ def farmer_to_response():
         # Generate Malayalam speech
         audio_filename = text_to_malayalam_audio(result['response'])
         result['audio_file'] = audio_filename
+        
+        if audio_filename:
+            result['audio_url'] = f"http://localhost:5000/audio/{audio_filename}"
 
         return jsonify(result)
 
@@ -187,20 +298,60 @@ def farmer_to_response():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Endpoint to serve audio files
+@app.route("/api/url_to_response", methods=["POST"])
+def url_to_response():
+    """
+    Accepts a URL, extracts text, sends to LLM with context,
+    generates response and audio file
+    
+    Request body (JSON):
+    {
+        "url": "https://example.com/article"
+    }
+    """
+    try:
+        data = request.get_json()
+        url = data.get('url')
+        
+        if not url:
+            return jsonify({"error": "No URL provided"}), 400
+        
+        # Extract text from URL
+        extracted_text = extract_text_from_url(url)
+        
+        if not extracted_text or len(extracted_text.strip()) < 10:
+            return jsonify({"error": "Could not extract meaningful text from URL"}), 400
+        
+        # Create query context
+        query_context = f"ഈ ഉള്ളടക്കം അടിസ്ഥാനമാക്കി കൃഷി ഉപദേശം നൽകുക: {extracted_text[:2000]}"
+        
+        # Get Gemini advice
+        result = get_farmer_advice(query_context)
+        
+        result['extracted_text'] = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
+        result['source_url'] = url
+        
+        # Generate Malayalam audio
+        audio_filename = text_to_malayalam_audio(result['response'])
+        result['audio_file'] = audio_filename
+        
+        if audio_filename:
+            result['audio_url'] = f"http://localhost:5000/audio/{audio_filename}"
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/audio/<filename>")
 def get_audio(filename):
     audio_dir = os.path.join(os.getcwd(), "static", "audio")
     return send_from_directory(audio_dir, filename)
 
-@app.route("/upload-file", methods=["POST"])
-
-# Serve uploaded files
 @app.route("/uploads/<filename>")
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
-# Upload MP3 file
 @app.route("/upload-audio", methods=["POST"])
 def upload_audio():
     if 'file' not in request.files:
