@@ -162,22 +162,22 @@ def text_to_malayalam_audio(text):
 
 def extract_text_from_url(url):
     """
-    Downloads MP3 from URL and converts it to text.
-    Works entirely with MP3 - no WAV files created on disk.
+    Downloads WebM from URL and converts it to text.
+    Works with WebM input files.
     """
     try:
-        # 1. Download MP3 file
+        # 1. Download WebM file
         response = requests.get(url, stream=True, timeout=20)
         response.raise_for_status()
 
-        # Save to temporary MP3 file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_mp3:
+        # Save to temporary WebM file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_webm:
             for chunk in response.iter_content(chunk_size=1024):
-                tmp_mp3.write(chunk)
-            tmp_mp3_path = tmp_mp3.name
+                tmp_webm.write(chunk)
+            tmp_webm_path = tmp_webm.name
 
-        # 2. Load MP3 and convert to audio data for speech recognition
-        audio = AudioSegment.from_mp3(tmp_mp3_path)
+        # 2. Load WebM and convert to audio data for speech recognition
+        audio = AudioSegment.from_file(tmp_webm_path, format="webm")
         
         # Export to a BytesIO buffer as WAV data (in-memory only)
         buffer = io.BytesIO()
@@ -193,8 +193,8 @@ def extract_text_from_url(url):
             except:
                 text = recognizer.recognize_google(audio_data, language='en-IN')
 
-        # Clean up temporary MP3 file
-        os.remove(tmp_mp3_path)
+        # Clean up temporary WebM file
+        os.remove(tmp_webm_path)
         
         print(f"Transcribed text: {text}")
         return text
@@ -219,7 +219,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @app.route("/api/farmer_to_response", methods=["POST"])
 def farmer_to_response():
     """
-    Handles audio input OR text query - MP3 only version
+    Handles audio input OR text query - WebM input, MP3 output
     """
     try:
         query_text = None
@@ -227,11 +227,11 @@ def farmer_to_response():
         # If audio provided
         if 'audio' in request.files:
             audio_file = request.files['audio']
-            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".webm")
             audio_file.save(temp_audio.name)
 
-            # Load MP3 and convert to buffer (in-memory)
-            audio = AudioSegment.from_mp3(temp_audio.name)
+            # Load WebM and convert to buffer (in-memory)
+            audio = AudioSegment.from_file(temp_audio.name, format="webm")
             buffer = io.BytesIO()
             audio.export(buffer, format="wav")
             buffer.seek(0)
@@ -321,8 +321,8 @@ def url_to_response():
 @app.route("/api/process_local_audio", methods=["POST"])
 def process_local_audio():
     """
-    Process an already uploaded MP3 file
-    Request body: {"filename": "crop_what_time_growth.mp3"}
+    Process an already uploaded WebM file
+    Request body: {"filename": "crop_what_time_growth.webm"}
     """
     try:
         data = request.get_json()
@@ -336,8 +336,8 @@ def process_local_audio():
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
         
-        # Load MP3 directly
-        audio = AudioSegment.from_mp3(file_path)
+        # Load WebM directly
+        audio = AudioSegment.from_file(file_path, format="webm")
         
         # Convert to buffer for speech recognition (in-memory)
         buffer = io.BytesIO()
@@ -390,8 +390,8 @@ def upload_audio():
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
 
-    if not file.filename.lower().endswith(".mp3"):
-        return jsonify({"error": "Only MP3 files are allowed"}), 400
+    if not file.filename.lower().endswith(".webm"):
+        return jsonify({"error": "Only WebM files are allowed"}), 400
 
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(file_path)
