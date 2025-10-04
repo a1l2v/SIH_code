@@ -69,9 +69,9 @@ const FarmAssistantInterface = () => {
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       const formData = new FormData();
       
-      // Create a filename with timestamp
+      // Create a filename with timestamp - FIXED TO USE WEBM
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `recording-${timestamp}.mp3`;
+      const filename = `recording-${timestamp}.webm`;
       
       formData.append('file', audioBlob, filename);
       
